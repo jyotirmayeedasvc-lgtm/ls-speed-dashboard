@@ -56,7 +56,9 @@ tr.gt td:first-child{background:var(--head)}
   <span class="sp"></span>
   <span id="asof"></span>
   <button class="btn" id="up">📂 Upload CSV</button>
-  <button class="btn" id="exp" title="Download aggregated data.json to commit to GitHub">⬇ data.json</button>
+  <button class="btn" id="exp" title="Download aggregated data.json">⬇ data.json</button>
+  <button class="btn" id="cfg" title="Set GitHub repo + token (one time)">⚙ GitHub Sync</button>
+  <button class="btn" id="pub" title="Save current data to the repo so everyone sees it">📤 Publish</button>
   <input type="file" id="file" accept=".csv,.json" hidden>
 </header>
 <div class="filters" id="filters"></div>
@@ -146,6 +148,32 @@ $('#exp').onclick=()=>{
   if(!DATA)return;
   const b=new Blob([JSON.stringify({generated:new Date().toISOString(),rows:DATA})],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='data.json';a.click();
+};
+
+// ---------- GitHub publish (token stays in this browser only) ----------
+const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+$('#cfg').onclick=()=>{
+  const guess=location.hostname.endsWith('github.io')?location.hostname.split('.')[0]+'/'+location.pathname.split('/')[1]:'';
+  const repo=prompt('GitHub repo (owner/name):',ls.get('gh_repo')||guess);if(!repo)return;
+  const tok=prompt('Personal access token (fine-grained, Contents: read & write, this repo only):',ls.get('gh_tok')||'');if(!tok)return;
+  ls.set('gh_repo',repo.trim());ls.set('gh_tok',tok.trim());toast('Saved');
+};
+$('#pub').onclick=async()=>{
+  const repo=ls.get('gh_repo'),tok=ls.get('gh_tok');
+  if(!DATA)return toast('Nothing to publish');
+  if(!repo||!tok)return toast('Click ⚙ GitHub Sync first');
+  try{
+    toast('Publishing…');
+    const url=`https://api.github.com/repos/${repo}/contents/data.json`;
+    const h={Authorization:'Bearer '+tok,Accept:'application/vnd.github+json'};
+    const cur=await fetch(url,{headers:h});
+    const sha=cur.ok?(await cur.json()).sha:undefined;
+    const bytes=new TextEncoder().encode(JSON.stringify({generated:new Date().toISOString(),rows:DATA}));
+    let bin='';for(let i=0;i<bytes.length;i+=8192)bin+=String.fromCharCode(...bytes.subarray(i,i+8192));
+    const r=await fetch(url,{method:'PUT',headers:h,body:JSON.stringify({message:'Update data.json',content:btoa(bin),sha})});
+    if(!r.ok)throw new Error('GitHub: '+r.status+' '+((await r.json()).message||''));
+    toast('Published ✔ live in ~1 min');
+  }catch(e){toast(e.message)}
 };
 
 // ---------- filters ----------
