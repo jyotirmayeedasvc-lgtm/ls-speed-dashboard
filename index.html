@@ -74,8 +74,8 @@ const R={date:0,week:1,sp:2,st:3,app:4,mc:5,sc:6,v:7};
 const FILTERS=[['sp','Service Profile'],['sc','Super Category'],['mc','Mega Cat'],['app','App/NApp Flag'],['st','Service Type'],['wk','Week']];
 const METRICS=[['SLA','SLA (avg days)',null],['D0','D0 %',2],['D1','D1 %',3],['D2','D2 %',4],['D4','D4 %',5],['D6','D6 %',6],['D8','D8 %',7]];
 const VIEWS={
-  daily:{topN:30,col:r=>r[R.date],label:d=>fmtDate(d),blocks:[['Service Type Daily',R.st],['Super Category Daily',R.sc]]},
-  weekly:{topN:15,col:r=>r[R.week],label:w=>String(w),blocks:[['Service Type Weekly',R.st],['Super Category Weekly',R.sc]]}
+  daily:{topN:Infinity,col:r=>r[R.date],label:d=>fmtDate(d),blocks:[['Service Type Daily',R.st],['Super Category Daily',R.sc]]},
+  weekly:{topN:Infinity,col:r=>r[R.week],label:w=>String(w),blocks:[['Service Type Weekly',R.st],['Super Category Weekly',R.sc]]}
 };
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const fmtDate=d=>{const s=String(d);return `${MON[+s.slice(4,6)-1]} ${+s.slice(6,8)}, ${s.slice(0,4)}`};
@@ -83,6 +83,7 @@ const fmtDate=d=>{const s=String(d);return `${MON[+s.slice(4,6)-1]} ${+s.slice(6
 // ---------- state ----------
 let DATA=null, GEN='', view=(location.hash.slice(1)==='weekly'?'weekly':'daily');
 const sel={sp:new Set(),sc:new Set(),mc:new Set(),app:new Set(),st:new Set(),wk:new Set()};
+let limit=Infinity;
 let metricsOn=new Set(METRICS.map(m=>m[0]));
 const $=s=>document.querySelector(s);
 const toast=t=>{const m=$('#msg');m.textContent=t;m.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>m.style.display='none',3500)};
@@ -188,10 +189,13 @@ function buildFilters(){
   el.innerHTML=FILTERS.map(([k,l])=>`<details class="ms${sel[k].size?' act':''}" data-k="${k}"${open.includes(k)?' open':''}>
     <summary>${l}${sel[k].size?` (${sel[k].size})`:''}</summary>
     <div class="pop"><div class="clr" data-clr="${k}">Clear</div>${optVals(k).map(v=>`<label><input type="checkbox" data-k="${k}" value="${esc(v)}"${sel[k].has(String(v))?' checked':''}>${esc(v)}</label>`).join('')}</div></details>`).join('')
-    +`<div class="chips">${METRICS.map(m=>`<span class="chip${metricsOn.has(m[0])?' on':''}" data-m="${m[0]}">${m[0]}</span>`).join('')}</div>`;
+    +`<select id="lim" class="btn">${[['Infinity','All periods'],[7,'Last 7'],[14,'Last 14'],[30,'Last 30'],[60,'Last 60'],[90,'Last 90']].map(([v,l])=>`<option value="${v}"${String(limit)===String(v)?' selected':''}>${l}</option>`).join('')}</select>
+    <div class="chips">${METRICS.map(m=>`<span class="chip${metricsOn.has(m[0])?' on':''}" data-m="${m[0]}">${m[0]}</span>`).join('')}</div>`;
 }
 $('#filters').addEventListener('change',e=>{
-  const t=e.target;if(t.type!=='checkbox')return;
+  const t=e.target;
+  if(t.id==='lim'){limit=+t.value;return render()}
+  if(t.type!=='checkbox')return;
   t.checked?sel[t.dataset.k].add(t.value):sel[t.dataset.k].delete(t.value);
   buildFilters();render();
 });
@@ -214,7 +218,7 @@ function filtered(){
 }
 function table(rows,cfg,dimIdx,m){
   // cols: latest N periods
-  const cols=[...new Set(rows.map(cfg.col))].sort((a,b)=>b-a).slice(0,cfg.topN);
+  const cols=[...new Set(rows.map(cfg.col))].sort((a,b)=>b-a).slice(0,limit);
   const cs=new Set(cols);
   const cells=new Map(),tot=new Map();
   for(const r of rows){
@@ -252,7 +256,7 @@ function render(){
   const rows=filtered(),cfg=VIEWS[view];
   if(!rows.length){main.innerHTML='<div class="empty">No rows match the filters.</div>';return}
   main.innerHTML=cfg.blocks.map(([title,idx])=>`<section><h2>${title}</h2>${
-    METRICS.filter(m=>metricsOn.has(m[0])).map(m=>`<h3>${m[1]} — top ${cfg.topN}</h3>${table(rows,cfg,idx,m)}`).join('')}</section>`).join('');
+    METRICS.filter(m=>metricsOn.has(m[0])).map(m=>`<h3>${m[1]}</h3>${table(rows,cfg,idx,m)}`).join('')}</section>`).join('');
 }
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{view=t.dataset.v;location.hash=view;render()});
 addEventListener('hashchange',()=>{view=location.hash.slice(1)==='weekly'?'weekly':'daily';render()});
