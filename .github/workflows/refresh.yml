@@ -1,0 +1,19 @@
+name: Refresh data
+on:
+  push:
+    paths: ['data/raw.csv', 'data/raw.xlsx']   # drop a new raw file here (or let your pipeline push it)
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install openpyxl
+      - run: python build_data.py $(ls data/raw.* | head -1) data.json
+      - run: |
+          git config user.name github-actions && git config user.email actions@github.com
+          git add data.json && (git diff --cached --quiet || git commit -m "refresh data.json" && git push)
