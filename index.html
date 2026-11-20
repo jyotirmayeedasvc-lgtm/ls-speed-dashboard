@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LS Speed Dashboard</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1c2230;--mute:#6b7385;--line:#e3e6ec;--acc:#2874f0;--accInk:#fff;--head:#eef1f6}
+@media(prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1b1f29;--ink:#e6e9f0;--mute:#9099ad;--line:#2b3140;--acc:#5b9bff;--accInk:#0d1117;--head:#232938}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:1px solid var(--line);padding:8px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+h1{font-size:16px;margin:0 12px 0 0}
+nav{display:flex;gap:4px}
+.tab,.btn{border:1px solid var(--line);background:var(--card);color:var(--ink);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
+.tab.on{background:var(--acc);color:var(--accInk);border-color:var(--acc)}
+.btn:hover,.tab:hover{border-color:var(--acc)}
+.sp{flex:1}
+#asof{color:var(--mute);font-size:12px}
+.filters{display:flex;flex-wrap:wrap;gap:8px;padding:10px 16px;align-items:center}
+details.ms{position:relative}
+details.ms>summary{list-style:none;cursor:pointer;border:1px solid var(--line);background:var(--card);padding:6px 10px;border-radius:6px;white-space:nowrap}
+details.ms[open]>summary,details.ms.act>summary{border-color:var(--acc)}
+details.ms>summary::after{content:" ▾";color:var(--mute)}
+.pop{position:absolute;top:34px;left:0;z-index:30;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);max-height:300px;overflow:auto;min-width:200px;padding:6px}
+.pop label{display:flex;gap:8px;padding:3px 6px;cursor:pointer;white-space:nowrap}
+.pop label:hover{background:var(--head)}
+.pop .clr{color:var(--acc);padding:3px 6px;cursor:pointer}
+.chips{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
+.chip{border:1px solid var(--line);border-radius:99px;padding:3px 10px;cursor:pointer;color:var(--mute);background:var(--card)}
+.chip.on{background:var(--acc);color:var(--accInk);border-color:var(--acc)}
+main{padding:0 16px 40px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:12px 0;padding:12px}
+h2{font-size:15px;margin:0 0 8px}
+h3{font-size:12px;margin:14px 0 4px;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{padding:4px 8px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+th{background:var(--head);position:sticky;top:0;font-weight:600}
+th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:var(--card);z-index:1;max-width:240px;overflow:hidden;text-overflow:ellipsis}
+th:first-child{background:var(--head);z-index:2}
+tr.gt td{font-weight:700;background:var(--head)}
+tr.gt td:first-child{background:var(--head)}
+.empty{padding:60px 16px;text-align:center;color:var(--mute)}
+#drop{outline:2px dashed var(--acc);outline-offset:-8px}
+#msg{position:fixed;right:16px;bottom:16px;background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;display:none;z-index:50}
+</style>
+</head>
+<body>
+<header>
+  <h1>LS Speed Dashboard</h1>
+  <nav>
+    <button class="tab" data-v="daily">Daily</button>
+    <button class="tab" data-v="weekly">Weekly</button>
+  </nav>
+  <span class="sp"></span>
+  <span id="asof"></span>
+  <button class="btn" id="up">📂 Upload CSV</button>
+  <button class="btn" id="exp" title="Download aggregated data.json to commit to GitHub">⬇ data.json</button>
+  <input type="file" id="file" accept=".csv,.json" hidden>
+</header>
+<div class="filters" id="filters"></div>
+<main id="main"></main>
+<div id="msg"></div>
+
+<script>
+// ---------- config ----------
+const NUMS=['sum_sla','total_units','d0_units','d1_units','d2_units','d4_units','d6_units','d8_units'];
+const DIMS=['service_profile','service_type_bucket','app_flag','mega_cat','analytic_super_category'];
+// row = [date, week, sp, st, app, mega, sc, ...8 nums]
+const R={date:0,week:1,sp:2,st:3,app:4,mc:5,sc:6,v:7};
+const FILTERS=[['sp','Service Profile'],['sc','Super Category'],['mc','Mega Cat'],['app','App/NApp Flag'],['st','Service Type'],['wk','Week']];
+const METRICS=[['SLA','SLA (avg days)',null],['D0','D0 %',2],['D1','D1 %',3],['D2','D2 %',4],['D4','D4 %',5],['D6','D6 %',6],['D8','D8 %',7]];
+const VIEWS={
+  daily:{topN:30,col:r=>r[R.date],label:d=>fmtDate(d),blocks:[['Service Type Daily',R.st],['Super Category Daily',R.sc]]},
+  weekly:{topN:15,col:r=>r[R.week],label:w=>String(w),blocks:[['Service Type Weekly',R.st],['Super Category Weekly',R.sc]]}
+};
+const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtDate=d=>{const s=String(d);return `${MON[+s.slice(4,6)-1]} ${+s.slice(6,8)}, ${s.slice(0,4)}`};
+
+// ---------- state ----------
+let DATA=null, GEN='', view=(location.hash.slice(1)==='weekly'?'weekly':'daily');
+const sel={sp:new Set(),sc:new Set(),mc:new Set(),app:new Set(),st:new Set(),wk:new Set()};
+let metricsOn=new Set(METRICS.map(m=>m[0]));
+const $=s=>document.querySelector(s);
+const toast=t=>{const m=$('#msg');m.textContent=t;m.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>m.style.display='none',3500)};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---------- data load ----------
+function setData(rows,gen){
+  DATA=rows;GEN=gen||'';
+  Object.values(sel).forEach(s=>s.clear());
+  buildFilters();render();
+}
+async function loadDefault(){
+  try{
+    if(window.__INLINE_DATA){const j=window.__INLINE_DATA;return setData(j.rows,j.generated)}
+    const r=await fetch('data.json',{cache:'no-cache'});if(!r.ok)throw 0;
+    const j=await r.json();setData(j.rows,j.generated);
+  }catch(e){DATA=null;render()}
+}
+
+// CSV parsing: no dependencies, handles quoted fields, aggregates while parsing
+function splitLine(l){
+  if(l.indexOf('"')<0)return l.split(',');
+  const o=[];let c='',q=false;
+  for(let i=0;i<l.length;i++){const ch=l[i];
+    if(q){if(ch==='"'){if(l[i+1]==='"'){c+='"';i++}else q=false}else c+=ch}
+    else if(ch==='"')q=true;else if(ch===','){o.push(c);c=''}else c+=ch}
+  o.push(c);return o;
+}
+async function parseCsv(text){
+  const lines=text.split(/\r?\n/);
+  const hdr=splitLine(lines[0]).map(h=>h.trim().replace(/^﻿/,''));
+  const need=['order_date','year_week_num_in_year',...DIMS,...NUMS];
+  const miss=need.filter(c=>!hdr.includes(c));
+  if(miss.length)throw new Error('Missing columns: '+miss.join(', '));
+  const ix=Object.fromEntries(hdr.map((h,i)=>[h,i]));
+  const agg=new Map();
+  const n=v=>{const x=parseFloat(v);return isNaN(x)?0:x};
+  for(let i=1;i<lines.length;i++){
+    if(!lines[i])continue;
+    const f=splitLine(lines[i]);
+    const d=n(f[ix.order_date]);if(!d)continue;
+    const key=[d|0,n(f[ix.year_week_num_in_year])|0,...DIMS.map(c=>(f[ix[c]]||'').trim()||'NA')];
+    const k=key.join('|');let a=agg.get(k);
+    if(!a){a={key,v:new Array(NUMS.length).fill(0)};agg.set(k,a)}
+    for(let j=0;j<NUMS.length;j++)a.v[j]+=n(f[ix[NUMS[j]]]);
+    if(i%20000===0){toast(`Parsing… ${Math.round(i/lines.length*100)}%`);await new Promise(r=>setTimeout(r))}
+  }
+  return [...agg.values()].map(a=>[...a.key,...a.v.map(Math.round)]);
+}
+$('#up').onclick=()=>$('#file').click();
+$('#file').onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  try{
+    toast('Reading '+f.name+'…');
+    const t=await f.text();
+    if(f.name.endsWith('.json')){const j=JSON.parse(t);setData(j.rows,j.generated)}
+    else setData(await parseCsv(t),new Date().toISOString().slice(0,19)+'Z (uploaded)');
+    toast('Loaded '+DATA.length.toLocaleString()+' aggregated rows');
+  }catch(err){toast(err.message||'Failed to load file')}
+  e.target.value='';
+};
+$('#exp').onclick=()=>{
+  if(!DATA)return;
+  const b=new Blob([JSON.stringify({generated:new Date().toISOString(),rows:DATA})],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='data.json';a.click();
+};
+
+// ---------- filters ----------
+const optVals=k=>{
+  const idx={sp:R.sp,sc:R.sc,mc:R.mc,app:R.app,st:R.st,wk:R.week}[k];
+  const s=[...new Set(DATA.map(r=>r[idx]))];
+  return k==='wk'?s.sort((a,b)=>b-a):s.sort();
+};
+function buildFilters(){
+  const el=$('#filters');
+  const open=[...el.querySelectorAll('details[open]')].map(d=>d.dataset.k);
+  el.innerHTML=FILTERS.map(([k,l])=>`<details class="ms${sel[k].size?' act':''}" data-k="${k}"${open.includes(k)?' open':''}>
+    <summary>${l}${sel[k].size?` (${sel[k].size})`:''}</summary>
+    <div class="pop"><div class="clr" data-clr="${k}">Clear</div>${optVals(k).map(v=>`<label><input type="checkbox" data-k="${k}" value="${esc(v)}"${sel[k].has(String(v))?' checked':''}>${esc(v)}</label>`).join('')}</div></details>`).join('')
+    +`<div class="chips">${METRICS.map(m=>`<span class="chip${metricsOn.has(m[0])?' on':''}" data-m="${m[0]}">${m[0]}</span>`).join('')}</div>`;
+}
+$('#filters').addEventListener('change',e=>{
+  const t=e.target;if(t.type!=='checkbox')return;
+  t.checked?sel[t.dataset.k].add(t.value):sel[t.dataset.k].delete(t.value);
+  buildFilters();render();
+});
+$('#filters').addEventListener('click',e=>{
+  const c=e.target.dataset;
+  if(c.clr){sel[c.clr].clear();buildFilters();render()}
+  if(c.m){metricsOn.has(c.m)?metricsOn.delete(c.m):metricsOn.add(c.m);buildFilters();render()}
+});
+document.addEventListener('click',e=>{if(!e.target.closest('details.ms'))document.querySelectorAll('details.ms[open]').forEach(d=>d.open=false)});
+
+// ---------- tables ----------
+function metricVal(m,v){
+  const u=v[1];if(!u)return null;
+  return m[2]===null?v[0]/u:v[m[2]]/u*100;
+}
+const fmt=(m,x)=>x===null?'–':m[2]===null?x.toFixed(1):x.toFixed(1)+'%';
+function filtered(){
+  const f=[[R.sp,sel.sp],[R.sc,sel.sc],[R.mc,sel.mc],[R.app,sel.app],[R.st,sel.st],[R.week,sel.wk]].filter(x=>x[1].size);
+  return f.length?DATA.filter(r=>f.every(([i,s])=>s.has(String(r[i])))):DATA;
+}
+function table(rows,cfg,dimIdx,m){
+  // cols: latest N periods
+  const cols=[...new Set(rows.map(cfg.col))].sort((a,b)=>b-a).slice(0,cfg.topN);
+  const cs=new Set(cols);
+  const cells=new Map(),tot=new Map();
+  for(const r of rows){
+    const c=cfg.col(r);if(!cs.has(c))continue;
+    const rk=r[dimIdx];
+    let m1=cells.get(rk);if(!m1){m1=new Map();cells.set(rk,m1)}
+    let a=m1.get(c);if(!a){a=new Array(8).fill(0);m1.set(c,a)}
+    let t=tot.get(c);if(!t){t=new Array(8).fill(0);tot.set(c,t)}
+    for(let j=0;j<8;j++){a[j]+=r[R.v+j];t[j]+=r[R.v+j]}
+  }
+  const val=(a)=>a?metricVal(m,a):null;
+  // sort rows by latest column that has any data
+  const lead=cols.find(c=>[...cells.values()].some(x=>val(x.get(c))>0));
+  const names=[...cells.keys()].sort((a,b)=>(val(cells.get(b).get(lead))||0)-(val(cells.get(a).get(lead))||0)||String(a).localeCompare(b));
+  // heat scale
+  let lo=Infinity,hi=-Infinity;
+  for(const x of cells.values())for(const a of x.values()){const v=val(a);if(v!==null&&(v>0)){lo=Math.min(lo,v);hi=Math.max(hi,v)}}
+  const bad=m[2]===null; // SLA: high = bad
+  const shade=v=>{
+    if(v===null||!(hi>lo)||v<=0)return'';
+    const t=(v-lo)/(hi-lo),good=bad?1-t:t;
+    const c=good>.5?'40,160,90':'220,70,70',a=(Math.abs(good-.5)*2*.32).toFixed(2);
+    return ` style="background:rgba(${c},${a})"`;
+  };
+  const head=`<tr><th>${dimIdx===R.st?'service_type':'analytic_super_category'}</th>${cols.map(c=>`<th>${cfg.label(c)}</th>`).join('')}</tr>`;
+  const body=names.map(n=>`<tr><td title="${esc(n)}">${esc(n)}</td>${cols.map(c=>{const v=val(cells.get(n).get(c));return `<td${shade(v)}>${fmt(m,v)}</td>`}).join('')}</tr>`).join('');
+  const gt=`<tr class="gt"><td>Grand total</td>${cols.map(c=>`<td>${fmt(m,val(tot.get(c)))}</td>`).join('')}</tr>`;
+  return `<div class="tw"><table>${head}${body}${gt}</table></div>`;
+}
+function render(){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.v===view));
+  $('#asof').textContent=GEN?'Data: '+GEN.replace('T',' ').replace(/\+00:00$/,'Z'):'';
+  const main=$('#main');
+  if(!DATA){main.innerHTML='<div class="empty" id="drop">No data loaded.<br>Click <b>📂 Upload CSV</b> and choose the SLA raw-data CSV.</div>';return}
+  const rows=filtered(),cfg=VIEWS[view];
+  if(!rows.length){main.innerHTML='<div class="empty">No rows match the filters.</div>';return}
+  main.innerHTML=cfg.blocks.map(([title,idx])=>`<section><h2>${title}</h2>${
+    METRICS.filter(m=>metricsOn.has(m[0])).map(m=>`<h3>${m[1]} — top ${cfg.topN}</h3>${table(rows,cfg,idx,m)}`).join('')}</section>`).join('');
+}
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{view=t.dataset.v;location.hash=view;render()});
+addEventListener('hashchange',()=>{view=location.hash.slice(1)==='weekly'?'weekly':'daily';render()});
+// drag & drop
+addEventListener('dragover',e=>e.preventDefault());
+addEventListener('drop',e=>{e.preventDefault();const f=e.dataTransfer.files[0];if(f){$('#file').files=e.dataTransfer.files;$('#file').onchange({target:$('#file')})}});
+loadDefault();
+</script>
+</body>
+</html>
